@@ -97,6 +97,100 @@ class BlockGibbsSampler(GibbsSampler):
             dist_lst.append(v)
         return dist_lst
 
+class LDPC():
+    #initializes LDPC weights and biases for Gibbs Sampling
+    def __init__(self, H, G, message_len, parity_len, h_km, h, received_signal):
+        #H - parity check matrix, G - generator matrix
+        #message_len - length of message, parity_len - number of parity bits
+        #h_km - hyperparameter associated with penalty terms
+        #h - another hyperparameter associated with parity check
+        self.H_matrix = H
+        self.G_matrix = G
+        self.message_len = message_len
+        self.parity_len = parity_len
+        self.h_km = h_km
+        self.h = h
+        self.calc_w_b(received_signal)
+
+    def calc_w_b(self, received_signal):
+        #calculates biases
+        H = self.H_matrix
+        h_km = self.h_km
+        h = self.h
+        n = self.message_len
+        #indices of nonzero elements of H (indexed by H)
+        nonzero_row, nonzero_col = np.nonzero(H)
+        #indices of last nonzero element per row (indexed by p)
+        p_last_idx = np.nonzero(nonzero_row - np.roll(nonzero_row, -1))[0]
+        #indices of nonzero elements, split by row (indexed by H)
+        nonzero_col_by_row = np.split(nonzero_col, p_last_idx[:-1]+1)
+        #indices of first nonzero element per row (indexed by H)
+        first_nonzero = np.argmax(H, axis=1)
+        #indices of first nonzero element per row (indexed by p)
+        p_first_idx = np.concatenate([np.array([0]), p_last_idx[:-1]+1])
+        #indices of last nonzero element in row (indexed by H)
+        last_nonzero = [nonzero[-1] for nonzero in nonzero_col_by_row]
+
+        #number of p spins
+        p_len = nonzero_row.size
+        #constructs visible bias:
+        b_sigma = -received_signal + 0.5 + 0.5*h_km*np.sum(H, axis=0)
+        for i in first_nonzero:
+            b_sigma[i] = b_sigma[i] - 0.5*h_km
+        b_p = h_km*np.ones(p_len)
+        for i in p_first_idx:
+            b_p[i] = 0.5*h_km
+        for j in p_last_idx:
+            b_p[j] = 0.5*h_km+0.5*h
+
+        #number of a spins
+        a_len = p_len - H.shape[0]
+        b_a = h_km*np.ones(a_len)
+
+        self.b = np.concatenate([b_sigma, b_p, b_a])
+
+        #calculate weight matrix
+        total_len = p_len + a_len + n
+        #weights for sigmas
+        w_sigma = np.zeros((n, total_len))
+        for i in range(self.parity_len):
+            for j in range(1, nonzero_col_by_row[i].size):
+                new_w = np.zeros(total_len)
+                new_w[n + p_first_idx[i] + j - 1] = -0.5*h_km
+                new_w[n + p_first_idx[i] + j] = -0.5*h_km
+                new_w[n + p_len + p_first_idx[i] - i + j - 1] = h_km
+                w_sigma[nonzero_col_by_row[i][j]] += new_w
+
+        w_p = np.zeros((p_len, total_len))
+        for i in range(self.parity_len):
+            start_i = p_first_idx[i]
+            row = nonzero_col_by_row[i]
+            w_p[start_i, row[1]] = -0.5*h_km
+            w_p[start_i, n + start_i + 1] = -0.5*h_km
+            w_p[start_i, n + p_len + start_i - i] = h_km
+            for j in range(1, row.size - 1):
+                w_p[start_i + j, row[j]] = -0.5*h_km
+                w_p[start_i + j, row[j+1]] = -0.5*h_km
+                w_p[start_i + j, n + start_i + j - 1] = -0.5*h_km
+                w_p[start_i + j, n + start_i + j + 1] = -0.5*h_km
+                w_p[start_i + j, n + p_len + start_i - i + j - 1] = h_km
+                w_p[start_i + j, n + p_len + start_i - i + j] = h_km
+            w_p[start_i + row.size - 1, row[-1]] = -0.5*h_km
+            w_p[start_i + row.size - 1, n + start_i + row.size - 2] = -0.5*h_km
+            w_p[start_i + row.size - 1, n + p_len + start_i - i + row.size - 2] = h_km
+
+        w_a = np.zeros((p_len - self.parity_len, total_len))
+        for i in range(self.parity_len):
+            start_i = p_first_idx[i]
+            row = nonzero_col_by_row[i]
+            for j in range(1, row.size):
+                w_a[start_i - i + j - 1, row[j]] = h_km
+                w_a[start_i - i + j - 1, n + start_i + j - 1] = h_km
+                w_a[start_i - i + j - 1, n + start_i + j] = h_km
+                w_a[start_i - i + j - 1, n + p_len + start_i - i + j - 1] = -2*h_km
+        self.W = np.vstack([w_sigma, w_p, w_a])
+
+
 """
 #This is for AND:
 #weights and biases
@@ -137,14 +231,20 @@ plot_graphs(and_dist_lst, "03", "AND: No Clamp", "ABC")
 #weights and biases obtained from Wikipedia example
 n = 6
 k = 3
-h_km = 0.5 #from paper
-h = 0.3 #from paper
+h_km = 10000#0.5 #from paper
+h =10000# 0.3 #from paper
 H = np.array([
     [1, 1, 1, 1, 0, 0],
     [0, 0, 1, 1, 0, 1],
     [1, 0, 0, 1, 1, 0]
 ])
-r = np.array([1, 0, 1, 0, 1, 1])
+G = np.array([
+    [1, 0, 0, 1, 0, 1],
+    [0, 1, 0, 1, 1, 1],
+    [0, 0, 1, 1, 1, 0]
+])
+m = np.array([1, 0, 1])
+r = np.mod(G.T.dot(m), 2)
 
 H_1st_zeroed_out = np.array([
     [0, 1, 1, 1, 0, 0],
@@ -161,7 +261,7 @@ W = np.array([
     [0,0,0,0,0,0,0,-0.5*h_km,-0.5*h_km,0,0,0,0,0,0,0,0,h_km,0,0,0,0,0],
     [0,0,0,0,0,0,0,0,-0.5*h_km,-0.5*h_km,-0.5*h_km,-0.5*h_km,0,-0.5*h_km,-0.5*h_km,0,0,0,h_km,h_km,0,h_km,0],
     [0,0,0,0,0,0,0,0,0,0,0,0,0,0,-0.5*h_km,-0.5*h_km,0,0,0,0,0,0,h_km],
-    [0,0,0,0,0,0,0,0,0,0,0,0,-0.5*h_km,-0.5*h_km,0,0,0,0,0,0,h_km,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,-0.5*h_km,-0.5*h_km,0,0,0,0,0,0,0,h_km,0,0],
 
     [0,-0.5*h_km,0,0,0,0,0,-0.5*h_km,0,0,0,0,0,0,0,0,h_km,0,0,0,0,0,0],
     [0,-0.5*h_km,-0.5*h_km,0,0,0,-0.5*h_km,0,-0.5*h_km,0,0,0,0,0,0,0,h_km,h_km,0,0,0,0,0],
@@ -172,20 +272,28 @@ W = np.array([
     [0,0,0,-0.5*h_km,0,-0.5*h_km,0,0,0,0,-0.5*h_km,0,-0.5*h_km,0,0,0,0,0,0,h_km,h_km,0,0],
     [0,0,0,0,0,-0.5*h_km,0,0,0,0,0,-0.5*h_km,0,0,0,0,0,0,0,0,h_km,0,0],
 
-    [0,0,0,-0.5*h_km,0,0,0,0,0,0,0,0,0,0,-0.5*h_km,0,0,0,0,0,h_km,0,0],
-    [0,0,0,-0.5*h_km,-0.5*h_km,0,0,0,0,0,0,0,0,-0.5*h_km,0,-0.5*h_km,0,0,0,0,h_km,h_km,0],
+    [0,0,0,-0.5*h_km,0,0,0,0,0,0,0,0,0,0,-0.5*h_km,0,0,0,0,0,0,h_km,0],
+    [0,0,0,-0.5*h_km,-0.5*h_km,0,0,0,0,0,0,0,0,-0.5*h_km,0,-0.5*h_km,0,0,0,0,0,h_km,h_km],
     [0,0,0,0,-0.5*h_km,0,0,0,0,0,0,0,0,0,-0.5*h_km,0,0,0,0,0,0,0,h_km],
 
-    [0,h_km,0,0,0,0,h_km,h_km,0,0,0,0,0,0,0,0,-2,0,0,0,0,0,0],
-    [0,0,h_km,0,0,0,0,h_km,h_km,0,0,0,0,0,0,0,0,-2,0,0,0,0,0],
-    [0,0,0,h_km,0,0,0,0,h_km,h_km,0,0,0,0,0,0,0,0,-2,0,0,0,0],
-    [0,0,0,h_km,0,0,0,0,0,0,h_km,h_km,0,0,0,0,0,0,0,-2,0,0,0],
-    [0,0,0,0,0,h_km,0,0,0,0,0,h_km,h_km,0,0,0,0,0,0,0,-2,0,0],
-    [0,0,0,h_km,0,0,0,0,0,0,0,0,0,h_km,h_km,0,0,0,0,0,0,-2,0],
-    [0,0,0,0,h_km,0,0,0,0,0,0,0,0,0,h_km,h_km,0,0,0,0,0,0,-2]
+    [0,h_km,0,0,0,0,h_km,h_km,0,0,0,0,0,0,0,0,-2*h_km,0,0,0,0,0,0],
+    [0,0,h_km,0,0,0,0,h_km,h_km,0,0,0,0,0,0,0,0,-2*h_km,0,0,0,0,0],
+    [0,0,0,h_km,0,0,0,0,h_km,h_km,0,0,0,0,0,0,0,0,-2*h_km,0,0,0,0],
+    [0,0,0,h_km,0,0,0,0,0,0,h_km,h_km,0,0,0,0,0,0,0,-2*h_km,0,0,0],
+    [0,0,0,0,0,h_km,0,0,0,0,0,h_km,h_km,0,0,0,0,0,0,0,-2*h_km,0,0],
+    [0,0,0,h_km,0,0,0,0,0,0,0,0,0,h_km,h_km,0,0,0,0,0,0,-2*h_km,0],
+    [0,0,0,0,h_km,0,0,0,0,0,0,0,0,0,h_km,h_km,0,0,0,0,0,0,-2*h_km]
 ])
-ldpc_sampler = GibbsSampler(W, b, 100000, 1000000, binary=False)
-ldpc_dist_lst, v = ldpc_sampler.run_sampling(visible_bits=6)
-print(v)
-#print(and_dist_lst)
-plot_graphs(ldpc_dist_lst, "06", "LDPC: 101011", "Message")
+
+ldpc_sampler = GibbsSampler(W, b, 100000, 100000, binary=False)
+
+ldpc_dist_lst, v = ldpc_sampler.run_sampling(visible_bits=3)
+
+plot_graphs(ldpc_dist_lst, "03", "LDPC: " + np.array2string(r, precision=1, separator='')[1:-1], "Message")
+
+"""
+#Check the LDPC formulation is correct:
+ldpc = LDPC(H, G, 6, 3, h_km, h, r)
+assert(np.array_equal(ldpc.b, b))
+assert(np.array_equal(ldpc.W, W))
+"""
