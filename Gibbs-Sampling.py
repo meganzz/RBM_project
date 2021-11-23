@@ -2,6 +2,7 @@ import numpy as np
 import random
 import matplotlib.pyplot as plt
 from matplotlib.ticker import StrMethodFormatter
+#from pyldpc import make_ldpc, decode
 
 #UTILITY
 def plot_graphs(dist_lst, bits, title, xlabel):
@@ -15,7 +16,7 @@ def plot_graphs(dist_lst, bits, title, xlabel):
 
     fig, ax = plt.subplots()
     ax.bar(labels, freq)
-    ax.xaxis.set_major_formatter(StrMethodFormatter("{x:"+bits+"b}"))
+    #ax.xaxis.set_major_formatter(StrMethodFormatter("{x:"+bits+"b}"))
     ax.xaxis.set_ticks(np.arange(0, 2**int(bits), 1))
     ax.set_xlabel(xlabel)
     ax.set_ylim([0, 1])
@@ -151,6 +152,7 @@ class LDPC():
 
         #calculate weight matrix
         total_len = p_len + a_len + n
+        print(total_len)
         #weights for sigmas
         w_sigma = np.zeros((n, total_len))
         for i in range(self.parity_len):
@@ -219,7 +221,7 @@ and_dist_lst, v = and_sampler.run_sampling(visible_bits=3)
 #print(and_dist_lst)
 plot_graphs(and_dist_lst, "03", "AND: No Clamp", "ABC")
 """
-
+"""
 #This is for LDPC
 #visible units are in the order of sigma, p, then a.
 #sigma - original spins of message, from 1 to n (total of n)
@@ -231,8 +233,8 @@ plot_graphs(and_dist_lst, "03", "AND: No Clamp", "ABC")
 #weights and biases obtained from Wikipedia example
 n = 6
 k = 3
-h_km = 10000#0.5 #from paper
-h =10000# 0.3 #from paper
+h_km = 0.5 #from paper
+h = 0.3 #from paper
 H = np.array([
     [1, 1, 1, 1, 0, 0],
     [0, 0, 1, 1, 0, 1],
@@ -243,7 +245,7 @@ G = np.array([
     [0, 1, 0, 1, 1, 1],
     [0, 0, 1, 1, 1, 0]
 ])
-m = np.array([1, 0, 1])
+m = np.array([0, 1, 1])
 r = np.mod(G.T.dot(m), 2)
 
 H_1st_zeroed_out = np.array([
@@ -285,15 +287,21 @@ W = np.array([
     [0,0,0,0,h_km,0,0,0,0,0,0,0,0,0,h_km,h_km,0,0,0,0,0,0,-2*h_km]
 ])
 
-ldpc_sampler = GibbsSampler(W, b, 100000, 100000, binary=False)
+ldpc_sampler = GibbsSampler(W, b, 100000, 10000, binary=False)
+ldpc_dist_lst, v = ldpc_sampler.run_sampling(visible_bits=6)
 
-ldpc_dist_lst, v = ldpc_sampler.run_sampling(visible_bits=3)
-
-plot_graphs(ldpc_dist_lst, "03", "LDPC: " + np.array2string(r, precision=1, separator='')[1:-1], "Message")
-
+plot_graphs(ldpc_dist_lst, "06", "LDPC: " + np.array2string(r, precision=1, separator='')[1:-1], "Message")
 """
-#Check the LDPC formulation is correct:
-ldpc = LDPC(H, G, 6, 3, h_km, h, r)
-assert(np.array_equal(ldpc.b, b))
-assert(np.array_equal(ldpc.W, W))
-"""
+
+n_code = 16 #length of total bit string
+h_km = 0.5 #from paper
+h = 0.3 #from paper
+w_r = 8 #from paper
+w_c = 4 #from paper
+H, G = make_ldpc(n_code, w_c, w_r, systematic=True)
+n_message = G.shape[1] #number of message bits (not including parity bits)
+k = H.shape[0] #number of rows of parity check
+print(k)
+#generate received signal - add noise later
+m = np.random.choice([0, 1], n_message)
+r = np.mod(G.dot(m), 2)
