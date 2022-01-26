@@ -25,18 +25,32 @@ def plot_graphs(dist_lst, bits, title, xlabel):
 
 class GibbsSampler():
     #Can be for Boltzmann Machine
-    def __init__(self, W, visible_bias, burn_in, n_samples, binary=True):
+    def __init__(self, W, visible_bias, burn_in, n_samples, obj_func, binary=True):
         self.W = W
         self.visible_bias = visible_bias
         self.visible_size = visible_bias.size
         self.burn_in = burn_in
         self.n_samples = n_samples
+        self.obj_func = obj_func
         self.binary = binary
         self.p_func = np.tanh
         self.low, self.high = -1, 1
         if binary:
             self.p_func = lambda x: 1.0/(1.0+np.exp(-x))
             self.low, self.high = 0, 1
+
+    def get_mle_estimate(self, dist_lst, n_freq):
+        #takes the most frequent n_freq configurations, returns the one with lowest value of obj_func
+        labels, freq = np.unique(dist_lst, return_counts=True, axis=0)
+        max_idx = (-freq).argsort()[:n_freq]
+        #print(max_idx)
+        #obj_func_lst = [self.obj_func(labels[i]) for i in max_idx]
+        #print(obj_func_lst)
+        min_energy_idx = np.argmin([self.obj_func(labels[i]) for i in max_idx])
+        #print(min_energy_idx)
+        #print([labels[i] for i in max_idx])
+        return labels[max_idx[min_energy_idx]]
+
     def sample(self, v):
         v_new = np.copy(v)
         for i in range(v.size):
@@ -46,7 +60,10 @@ class GibbsSampler():
             if not self.binary:
                 v_new[i] = 2*v_new[i]-1
         return v_new
-    def run_sampling(self, v_init=None, visible_bits=None):
+
+    def run_sampling(self, n_freq, v_init=None, visible_bits=None):
+        #obj_func - function to minimize
+        #n_freq - number of configurations to evaluate once sampling is done
         if visible_bits is None:
             visible_bits = self.visible_size
         v = v_init
@@ -61,7 +78,11 @@ class GibbsSampler():
                 dist_lst.append((1-v[:visible_bits])//2)
             else:
                 dist_lst.append(v[:visible_bits])
-        return dist_lst, v
+        #return dist_lst, v
+        return self.get_mle_estimate(dist_lst, n_freq)
+        #labels, freq = np.unique(dist_lst, return_counts=True, axis=0)
+        #return labels[np.argmax(freq)]
+
 
 class BlockGibbsSampler(GibbsSampler):
     #For RBM
@@ -69,6 +90,7 @@ class BlockGibbsSampler(GibbsSampler):
         super().__init__(W, visible_bias, burn_in, n_samples, binary)
         self.hidden_bias = hidden_bias
         self.hidden_size = hidden_bias.size
+
     def sample(self, v, h, clamp_vals=None):
         #takes an individual sample
         #clamp_vals is a list of tuples (index, value) where v[index] = val
@@ -80,6 +102,7 @@ class BlockGibbsSampler(GibbsSampler):
             for clamp in clamp_vals:
                 v_new[clamp[0]] = clamp[1]
         return v_new, h_new
+
     def run_sampling(self, v_init=None, h_init=None, clamp_vals=None):
         #takes all of the samples
         #clamp_vals is a list of tuples (index, value) where v[index] = val
@@ -110,14 +133,65 @@ class LDPC():
         self.parity_len = parity_len
         self.h_km = h_km
         self.h = h
-        self.calc_w_b(received_signal)
+        self.r = received_signal
+        self.calc_w_b()
 
-    def calc_w_b(self, received_signal):
+    def obj_func(self, spin_config):
+        #objective function for LDPC
+        #objective function with only n_code spins (before reformulation)
+        return np.linalg.norm(r - spin_config)**2 + 3*self.h*np.sum(np.mod(self.H_matrix.dot(spin_config), 2))
+        """
+        #objective function with all visible spins
+        def penalty_func(p_im, p_im_1, sigma_im, a_im):
+            return 0.5*(p_im*p_im_1 + p_im_1*sigma_im + p_im*sigma_im) + (a_im+0.5)*(2*a_im - p_im - p_im_1 - sigma_im)
+
+        spin_config = (1 - spin_config) / 2
+        n = self.message_len
+        h_km = self.h_km
+        total = np.dot(spin_config[:n], self.r - 0.5)
+
+        H = self.H_matrix
+        #indices of nonzero elements of H (indexed by H)
+        nonzero_row, nonzero_col = np.nonzero(H)
+        #indices of last nonzero element per row (indexed by p)
+        p_last_idx = np.nonzero(nonzero_row - np.roll(nonzero_row, -1))[0]
+        #indices of nonzero elements, split by row (indexed by H)
+        nonzero_col_by_row = np.split(nonzero_col, p_last_idx[:-1]+1)
+        #indices of first nonzero element per row (indexed by H)
+        first_nonzero = np.argmax(H, axis=1)
+        #indices of first nonzero element per row (indexed by p)
+        p_first_idx = np.concatenate([np.array([0]), p_last_idx[:-1]+1])
+        #indices of last nonzero element in row (indexed by H)
+        last_nonzero = [nonzero[-1] for nonzero in nonzero_col_by_row]
+
+        p_len = nonzero_row.size - H.shape[0]
+
+        for i in range(self.parity_len):
+            start_i = p_first_idx[i]
+            row = nonzero_col_by_row[i]
+
+            p_im = spin_config[n + start_i - i]
+            p_im_1 = spin_config[row[0]]
+            sigma_im = spin_config[row[1]]
+            a_im = spin_config[n + p_len + start_i - i]
+            total += penalty_func(p_im, p_im_1, sigma_im, a_im)
+            for j in range(2, row.size):
+                p_im = spin_config[n + start_i - i + j - 1]
+                p_im_1 = spin_config[n + start_i - i + j - 2]
+                sigma_im = spin_config[row[j]]
+                a_im = spin_config[n + p_len + start_i - i + j - 1]
+                total += penalty_func(p_im, p_im_1, sigma_im, a_im)
+            total -= 0.5*h_km*spin_config[n + start_i - i + row.size - 1]
+        return total
+        """
+
+    def calc_w_b(self):
         #calculates biases
         H = self.H_matrix
         h_km = self.h_km
         h = self.h
         n = self.message_len
+        received_signal = self.r
         #indices of nonzero elements of H (indexed by H)
         nonzero_row, nonzero_col = np.nonzero(H)
         #indices of last nonzero element per row (indexed by p)
@@ -177,12 +251,12 @@ class LDPC():
             w_p[start_i - i, row[0]] = -0.5*h_km
             w_p[start_i - i, row[1]] = -0.5*h_km
             w_p[start_i - i, row[2]] = -0.5*h_km
-            w_p[start_i - i, n + start_i - i] = -0.5*h_km
+            w_p[start_i - i, n + start_i - i + 1] = -0.5*h_km
             w_p[start_i - i, n + p_len + start_i - i] = h_km
             w_p[start_i - i, n + p_len + start_i - i + 1] = h_km
             for j in range(2, row.size - 1):
-                w_p[start_i - i + j - 1, row[j-1]] = -0.5*h_km
                 w_p[start_i - i + j - 1, row[j]] = -0.5*h_km
+                w_p[start_i - i + j - 1, row[j+1]] = -0.5*h_km
                 w_p[start_i - i + j - 1, n + start_i - i + j - 2] = -0.5*h_km
                 w_p[start_i - i + j - 1, n + start_i - i + j] = -0.5*h_km
                 w_p[start_i - i + j - 1, n + p_len + start_i - i + j - 1] = h_km
@@ -206,47 +280,16 @@ class LDPC():
                 w_a[start_i - i + j - 1, n + p_len + start_i - i + j - 1] = -2*h_km
         self.W = np.vstack([w_sigma, w_p, w_a])
 
-"""
-n_code = 6
-k = 3
-h_km = 0.5 #from paper
-h = 0.3 #from paper
-H = np.array([
-    [1, 1, 1, 1, 0, 0],
-    [0, 0, 1, 1, 0, 1],
-    [1, 0, 0, 1, 1, 0]
-])
-G = np.array([
-    [1, 0, 0, 1, 0, 1],
-    [0, 1, 0, 1, 1, 1],
-    [0, 0, 1, 1, 1, 0]
-])
-m = np.array([1, 0, 1])
-r = np.mod(G.T.dot(m), 2)
-print("should get", r)
-ldpc = LDPC(H, G, n_code, k, h_km, h, r)
-"""
-"""
-W = np.array([
-    [0,-0.5*h_km,0,-0.5*h_km,0,0,   -0.5*h_km,0,0,   0,0,  -0.5*h_km,0,  h_km,0,0,  0,0,  h_km,0],
-    [-0.5*h_km,0,0,0,0,0,   -0.5*h_km,0,0,   0,0,  0,0,  h_km,0,0,  0,0,  0,0],
-    [0,0,0,-0.5*h_km,0,0,   -0.5*h_km,-0.5*h_km,0,   -0.5*h_km,0,  0,0,  0,h_km,0,  h_km,0,  0,0],
-    [-0.5*h_km,0,-0.5*h_km,0,0,0,   0,-0.5*h_km,-0.5*h_km,   -0.5*h_km,0,  -0.5*h_km,0,  0,0,h_km,  h_km,0,  h_km,0],
-    [0,0,0,0,0,0,   0,0,0,   0,0,  -0.5*h_km,-0.5*h_km,  0,0,0,  0,0,  0,h_km],
-    [0,0,0,0,0,0,   0,0,0,   -0.5*h_km,-0.5*h_km,  0,0,  0,0,0,  0,h_km,  0,0],
 
-    [-0.5*h_km,-0.5*h_km,-0.5*h_km,0,0,0,   -0.5*h_km,0,0,   0,0,   0,0,   h_km,h_km,0,  0,0,  0,0],
-    [0,-0.5*h_km,-0.5*h_km,0,0,0,   -0.5*h_km,0,-0.5*h_km,   0,0,   0,0,   0,h_km,h_km,  0,0,  0,0],
-])
-"""
-n_code = 8 #length of total bit string
-h_km = 0.5#0.5 #0.5 #from paper
-h = 0.3#0.3 #0.3 #from paper
-w_r = 4 #from paper
-w_c = 2 #from paper
+n_code = 32 #length of total bit string
+n_freq = 20 #how many configurations to evaluate
+h_km = 0.025 #0.5 #from paper
+h = 0.025 #0.015 #0.3 #from paper
+w_r = 8 #from paper
+w_c = 4 #from paper
 
-blocks = 40
-snr_range = 6
+blocks = 40#50
+snr_range = 10
 bp_ber = np.zeros(snr_range)
 mle_ber = np.zeros(snr_range)
 for _ in range(blocks):
@@ -262,19 +305,21 @@ for _ in range(blocks):
 
         ldpc = LDPC(H, G, n_code, k, h_km, h, (1-r_noise)/2)
 
-        ldpc_sampler = GibbsSampler(ldpc.W, ldpc.b, 100000, 100000, binary=False)
-        ldpc_dist_lst, v = ldpc_sampler.run_sampling(visible_bits=n_code)
-        #plot_graphs(ldpc_dist_lst, "06", "LDPC: " + np.array2string(r, precision=1, separator='')[1:-1], "Message")
-        #v_bin = [int(np.array2string(a, separator="")[1:-1], 2) for a in ldpc_dist_lst]
-        total = len(ldpc_dist_lst)
-        labels, freq = np.unique(ldpc_dist_lst, return_counts=True, axis=0)
-        freq = freq/total
-        mle_result = labels[np.argmax(freq)]
+        ldpc_sampler = GibbsSampler(ldpc.W, ldpc.b, burn_in=10000, n_samples=30000, obj_func=ldpc.obj_func, binary=False)
+        mle_result = ldpc_sampler.run_sampling(n_freq, visible_bits=n_code)
+
         bp_ber[snr] += (n_code - np.sum(np.equal(r_decode_bp, r)))/(blocks*n_code)
         mle_ber[snr] += (n_code - np.sum(np.equal(mle_result, r)))/(blocks*n_code)
-        # print("mle result", mle_result)
-        # print("original", r)
-        # print("bp result", r_decode_bp)
+        #print(np.mod(H.dot(mle_result), 2))
+        #print("mle result", mle_result)
+        #print("original", r)
+        #print("bp result", r_decode_bp)
+        #print(mle_ber[snr])
+
+print("bp: ", bp_ber)
+print("parity_check: ", mle_ber)
+
+np.savetxt('data.txt', np.array([bp_ber,mle_ber]))
 
 fig, ax = plt.subplots()
 plt.plot(range(snr_range), bp_ber, color='red', label='bp')
@@ -282,6 +327,6 @@ plt.plot(range(snr_range), mle_ber, color='blue', label='parity_check')
 ax.set_xlabel("SNR")
 ax.set_ylabel("BER")
 ax.set_yscale('log')
-plt.title("ldpc_8_4_2")
+plt.title("ldpc_32_4_8")
 plt.legend(loc='best')
-plt.savefig('ldpc_8_4_2_paper.png')
+plt.savefig('ldpc_32_4_8_paper.png')
