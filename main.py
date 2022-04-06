@@ -5,19 +5,18 @@ from pyldpc import make_ldpc, encode, decode
 import ldpc
 import GibbsSampling
 
-n_code = 32 #length of total bit string
+n_code = 8#32 #length of total bit string
 n_freq = 20 #how many configurations to evaluate
-h_km = 0.025 #0.5 #from paper
-h = 0.015 #0.015 #0.3 #from paper
+h_km = 0.25#0.025 #0.5 #from paper
+h = 0.15#0.015 #0.015 #0.3 #from paper
 h_mod2 = 0.15 #for mod2 formulation
-w_r = 8 #from paper
-w_c = 4 #from paper
-beta = 2 #inverse temperature
+w_r = 4#8 #from paper
+w_c = 2#4 #from paper
+beta = 1#2 #inverse temperature
 burn_in = 10000
 n_samples = 10000
-n_freq = 20
 
-blocks = 1#300#50
+blocks = 1#60#5#100#5#300#50
 snr_range = np.linspace(1.5, 9.5, 6)
 
 #UTILITY
@@ -105,18 +104,11 @@ def run_gibbs(ising_form, override):
             r_noise = encode(G, m, snr=snr_range[i])
             r_decode_bp = decode(H, r_noise, 20)
             ldpc_sampler = setup_gibbs(ising_form, H, r_noise)
-            _, mle_result = ldpc_sampler.hit_engine(visible_bits=n_code)
-            #mle_result = ldpc_sampler.hit_engine(visible_bits=n_code)[1]
-
-            """labels, freq = np.unique(dist_lst, axis=0, return_counts=True)
-            labels = np.array(labels)
-            trunc_labels = np.unique(labels[:,:n_code], axis=0)
-            energy = np.linalg.norm(r_noise - trunc_labels, axis=1)**2 + h_mod2*np.sum(np.mod(H.dot(trunc_labels.T), 2), axis=0)
+            dist_lst, mle_result = ldpc_sampler.hit_engine(visible_bits=n_code)
+            trunc_labels = np.unique(np.array(dist_lst)[:,:n_code], axis=0)
+            energy = ldpc_sampler.obj_func(trunc_labels)
             top_energy_idx = energy.argsort()[0]
-            print(r)
-            print(trunc_labels[top_energy_idx])
-            print(mle_result)"""
-
+            mle_result = trunc_labels[top_energy_idx]
 
             bp_ber[i] += (n_code - np.sum(np.equal(r_decode_bp, r)))
             mle_ber[i] += (n_code - np.sum(np.equal(mle_result, r)))
@@ -138,10 +130,9 @@ def run_gibbs(ising_form, override):
 def prob_dist(override):
     #gets distribution
     for block in range(blocks):
-        init_vals = gen_matrices()
+        H, G, m = gen_matrices()
+        r = np.mod(G.dot(m), 2)
         for i in range(6):
-            H, G, m = gen_matrices()
-            r = np.mod(G.dot(m), 2)
             r_noise = encode(G, m, snr=snr_range[i])
             ldpc_sampler = setup_gibbs(True, H, r_noise)
             dist_lst, _ = ldpc_sampler.hit_engine(visible_bits=n_code)
@@ -157,8 +148,8 @@ def prob_dist(override):
 
             #log probability
             labels = np.array(labels)
-            obj = -(np.sum(np.multiply(labels.T, np.dot(W, labels.T)), axis=0) + np.dot(b, labels.T))
-            top_obj_idx = obj.argsort()[:n_freq]
+            obj = np.sum(np.multiply(labels.T, np.dot(W, labels.T)), axis=0) + np.dot(b, labels.T)
+            top_obj_idx = (-obj).argsort()[:n_freq]
 
             #energy
             trunc_labels = np.unique(labels[:,:n_code], axis=0)
@@ -240,7 +231,7 @@ def prob_dist(override):
 
             axs[1].set_xlabel("codeword")
             #axs[0].set_title("Transmitted: "+str(r)+", Received: "+str(r_noise))
-            axs[0].set_title("mod2 32-bit: SNR Level " + str(i))
+            axs[0].set_title("mod2 " + str(n_code) + "-bit: SNR Level " + str(i))
             print("mod2" + str(block) + str(i))
             print("energy: ", n_code - np.sum(np.equal(labels[top_energy_idx[0]][:n_code], r)))
             print()
@@ -248,6 +239,164 @@ def prob_dist(override):
                 plt.savefig('prob_dist_mod2_'+str(n_code)+'_mle_'+str(block)+'_'+str(i)+'.png')
                 plt.close()
             #plt.show()
+
+def check_formulation():
+    #checks formulation for a given example
+    H = np.array([
+        [1, 1, 1, 1, 0, 0],
+        [0, 0, 1, 1, 0, 1],
+        [1, 0, 0, 1, 1, 0]
+    ])
+    G = np.array([
+        [1, 0, 0, 1, 0, 1],
+        [0, 1, 0, 1, 1, 1],
+        [0, 0, 1, 1, 1, 0]
+    ])
+    m = np.array([0, 1, 1])
+    r = np.mod(G.T.dot(m), 2) + np.array([.1,-.1,.05,.04,-.05,-.06])
+    b_sigma = -r+0.5+0.5*h_km*(np.sum(H, axis=0))
+    b_p = np.array([h_km, h_km, 0.5*h_km + 0.5*h, h_km, 0.5*h_km + 0.5*h, h_km, 0.5*h_km + 0.5*h])
+    b_a = -h_km*np.ones(7)
+    b = np.concatenate([b_sigma, b_p, b_a])
+    W = np.array([
+        [0,-0.5*h_km,0,-0.5*h_km,0,0,  -0.5*h_km,0,0,0,0,-0.5*h_km,0,  h_km,0,0,0,0,h_km,0],
+        [-0.5*h_km,0,0,0,0,0,  -0.5*h_km,0,0,0,0,0,0,  h_km,0,0,0,0,0,0],
+        [0,0,0,-0.5*h_km,0,0,  -0.5*h_km,-0.5*h_km,0,-0.5*h_km,0,0,0,  0,h_km,0,h_km,0,0,0],
+        [-0.5*h_km,0,-0.5*h_km,0,0,0,  0,-0.5*h_km,-0.5*h_km,-0.5*h_km,0,-0.5*h_km,0,  0,0,h_km,h_km,0,h_km,0],
+        [0,0,0,0,0,0,  0,0,0,0,0,-0.5*h_km,-0.5*h_km,  0,0,0,0,0,0,h_km],
+        [0,0,0,0,0,0,  0,0,0,-0.5*h_km,-0.5*h_km,0,0,  0,0,0,0,h_km,0,0],
+
+        [-0.5*h_km,-0.5*h_km,-0.5*h_km,0,0,0,  0,-0.5*h_km,0,0,0,0,0,  h_km,h_km,0,0,0,0,0],
+        [0,0,-0.5*h_km,-0.5*h_km,0,0,  -0.5*h_km,0,-0.5*h_km,0,0,0,0,  0,h_km,h_km,0,0,0,0],
+        [0,0,0,-0.5*h_km,0,0,  0,-0.5*h_km,0,0,0,0,0,  0,0,h_km,0,0,0,0],
+
+        [0,0,-0.5*h_km,-0.5*h_km,0,-0.5*h_km,  0,0,0,0,-0.5*h_km,0,0,  0,0,0,h_km,h_km,0,0],
+        [0,0,0,0,0,-0.5*h_km,  0,0,0,-0.5*h_km,0,0,0,  0,0,0,0,h_km,0,0],
+
+        [-0.5*h_km,0,0,-0.5*h_km,-0.5*h_km,0,  0,0,0,0,0,0,-0.5*h_km,  0,0,0,0,0,h_km,h_km],
+        [0,0,0,0,-0.5*h_km,0,  0,0,0,0,0,-0.5*h_km,0,  0,0,0,0,0,0,h_km],
+
+        [h_km,h_km,0,0,0,0,  h_km,0,0,0,0,0,0,  -2*h_km,0,0,0,0,0,0],
+        [0,0,h_km,0,0,0,  h_km,h_km,0,0,0,0,0,  0,-2*h_km,0,0,0,0,0],
+        [0,0,0,h_km,0,0,  0,h_km,h_km,0,0,0,0,  0,0,-2*h_km,0,0,0,0],
+
+        [0,0,h_km,h_km,0,0,  0,0,0,h_km,0,0,0,  0,0,0,-2*h_km,0,0,0],
+        [0,0,0,0,0,h_km,  0,0,0,h_km,h_km,0,0,  0,0,0,0,-2*h_km,0,0],
+
+        [h_km,0,0,h_km,0,0,  0,0,0,0,0,h_km,0,  0,0,0,0,0,-2*h_km,0],
+        [0,0,0,0,h_km,0,  0,0,0,0,0,h_km,h_km,  0,0,0,0,0,0,-2*h_km]
+    ])
+    b += np.diag(W)
+    np.fill_diagonal(W, 0)
+    W = 0.5*W
+    assert np.array_equal(W, W.T), f"not symmetric"
+    ldpc_obj = ldpc.LDPC(H, 6, 3, h_km, h, h_mod2, r, w_c)
+    assert np.array_equal(ldpc_obj.b, b), f"bias different"
+    assert np.array_equal(ldpc_obj.W, W), f"weights different"
+
+def ber_dist(override):
+    #BER distribution according to distributions in prob_dist
+    freq_ber = [[] for _ in range(6)]
+    obj_ber = [[] for _ in range(6)]
+    energy_ber = [[] for _ in range(6)]
+    mod2_freq_ber = [[] for _ in range(6)]
+    mod2_energy_ber = [[] for _ in range(6)]
+    for block in range(blocks):
+        H, G, m = gen_matrices()
+        r = np.mod(G.dot(m), 2)
+        for i in range(6):
+            r_noise = encode(G, m, snr=snr_range[i])
+            ldpc_sampler = setup_gibbs(True, H, r_noise)
+            dist_lst, _ = ldpc_sampler.hit_engine(visible_bits=n_code)
+            W = ldpc_sampler.W
+            b = ldpc_sampler.visible_bias
+
+            #original formulation
+            #frequency
+            labels, freq = np.unique(dist_lst, axis=0, return_counts=True)
+            top_freq_idx = (-freq).argsort()[0]
+            freq_ber[i].append((n_code - np.sum(np.equal(labels[top_freq_idx][:n_code], r)))/n_code)
+
+            #unnormalized log probability
+            obj = -(np.sum(np.multiply(labels.T, np.dot(W, labels.T)), axis=0) + np.dot(b, labels.T))
+            top_obj_idx = obj.argsort()[0]
+            obj_ber[i].append((n_code - np.sum(np.equal(labels[top_obj_idx][:n_code], r)))/n_code)
+
+            #energy
+            trunc_labels = np.unique(labels[:,:n_code], axis=0)
+            energy = ldpc_sampler.obj_func(trunc_labels)
+            top_energy_idx = energy.argsort()[0]
+            energy_ber[i].append((n_code - np.sum(np.equal(labels[top_energy_idx][:n_code], r)))/n_code)
+
+            #mod2
+            ldpc_sampler = setup_gibbs(False, H, r_noise)
+            dist_lst, _ = ldpc_sampler.hit_engine(visible_bits=n_code)
+            #frequency
+            labels, freq = np.unique(dist_lst, axis=0, return_counts=True)
+            top_freq_idx = (-freq).argsort()[0]
+            mod2_freq_ber[i].append((n_code - np.sum(np.equal(labels[top_freq_idx], r)))/n_code)
+
+            #energy
+            energy = ldpc_sampler.obj_func(labels)
+            top_energy_idx = energy.argsort()[0]
+            mod2_energy_ber[i].append((n_code - np.sum(np.equal(labels[top_energy_idx], r)))/n_code)
+
+    bins = np.linspace(0, 1, num=n_code+1)
+    for i in range(6):
+        fig, axs = plt.subplots(3, 1, sharex=True)
+        fig.set_size_inches(11, 9)
+        axs[0].hist(freq_ber[i], bins=bins, color="blue")
+        axs[0].set_title("Count")
+        axs[1].hist(obj_ber[i], bins=bins, color="green")
+        axs[1].set_title("Log Probability")
+        axs[2].hist(energy_ber[i], bins=bins, color="magenta")
+        axs[2].set_title("Energy")
+        plt.xlim(0,1)
+        fig.suptitle("BER for Ising " + str(n_code) + "-bit: SNR Level " + str(i))
+        if override:
+            plt.savefig('ber_dist_ising_'+str(n_code)+'_mle_'+str(block)+'_'+str(i)+'.png')
+            plt.close()
+
+        fig, axs = plt.subplots(2, 1, sharex=True)
+        fig.set_size_inches(11, 6)
+        axs[0].hist(mod2_freq_ber[i], bins=bins, color="blue")
+        axs[0].set_title("Count")
+        axs[1].hist(mod2_energy_ber[i], bins=bins, color="magenta")
+        axs[1].set_title("Energy")
+        plt.xlim(0,1)
+        fig.suptitle("BER for mod2 " + str(n_code) + "-bit: SNR Level " + str(i))
+        if override:
+            plt.savefig('ber_dist_mod2_'+str(n_code)+'_mle_'+str(block)+'_'+str(i)+'.png')
+            plt.close()
+
+def test_self_loop():
+    #determine how to handle self loops
+    W = np.array([
+        [-1, 2, 1.5],
+        [2, 0, -2],
+        [1.5, -2, -1.5]
+    ])
+    b = np.array([0.5, -2, 1])
+
+    all_codes = np.array([int_to_arr(i, 3) for i in range(8)])
+    neg_energy = np.sum(np.multiply(all_codes.T, np.dot(W, all_codes.T)), axis=0) + np.dot(b, all_codes.T)
+    p_codes = np.exp(neg_energy)
+    p_codes = p_codes / np.sum(p_codes)
+    fig, axs = plt.subplots(2, 1, sharex=True, sharey=True)
+    axs[0].stem(p_codes)
+    axs[0].set_title("Probability")
+
+    b += np.diag(W)
+    np.fill_diagonal(W, 0)
+    sampler = GibbsSampling.GibbsSampler(W, b, burn_in=100000, n_samples=100000, obj_func=None)
+    dist_lst, _ = sampler.hit_engine()
+    labels, freq = np.unique(dist_lst, axis=0, return_counts=True)
+    labels = [int(np.array2string(a, separator="")[1:-1], 2) for a in labels]
+    freq = freq/len(dist_lst)
+    all_freq = [freq[i] if i in labels else 0 for i in range(8)]
+    axs[1].stem(all_freq)
+    axs[1].set_title("Move diagonal entries to bias")
+    plt.show()
 
 if __name__ == "__main__":
     #parsing code from hw1 template
@@ -265,3 +414,15 @@ if __name__ == "__main__":
     elif args.mode == 3:
         #distribution of both methods
         prob_dist(args.override)
+    elif args.mode == 4:
+        #check formulation
+        check_formulation()
+    elif args.mode == 5:
+        #ber distribution
+        ber_dist(args.override)
+    elif args.mode == 6:
+        #determine self loop
+        test_self_loop()
+
+#distribution of bers for mod2 and probs for different snrs hist
+#check with 8 full - 1 sample

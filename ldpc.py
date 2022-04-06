@@ -58,9 +58,9 @@ class LDPC():
 
         #number of a spins
         a_len = p_len
-        b_a = h_km*np.ones(a_len)
+        b_a = -h_km*np.ones(a_len)
 
-        self.b = np.concatenate([b_sigma, b_p, b_a])
+        b = np.concatenate([b_sigma, b_p, b_a])
 
         #calculate weight matrix
         total_len = p_len + a_len + n
@@ -105,7 +105,7 @@ class LDPC():
                 w_p[start_i - i + j - 1, n + p_len + start_i - i + j - 1] = h_km
                 w_p[start_i - i + j - 1, n + p_len + start_i - i + j] = h_km
             w_p[start_i - i + row.size - 2, row[-1]] = -0.5*h_km
-            w_p[start_i - i + row.size - 2, n + start_i - i + row.size - 2] = -0.5*h_km
+            w_p[start_i - i + row.size - 2, n + start_i - i + row.size - 3] = -0.5*h_km
             w_p[start_i - i + row.size - 2, n + p_len + start_i - i + row.size - 2] = h_km
 
         w_a = np.zeros((a_len, total_len))
@@ -121,7 +121,11 @@ class LDPC():
                 w_a[start_i - i + j - 1, n + start_i - i + j - 2] = h_km
                 w_a[start_i - i + j - 1, n + start_i - i + j - 1] = h_km
                 w_a[start_i - i + j - 1, n + p_len + start_i - i + j - 1] = -2*h_km
-        self.W = np.vstack([w_sigma, w_p, w_a])
+        W = np.vstack([w_sigma, w_p, w_a])
+        b += np.diag(W)
+        np.fill_diagonal(W, 0)
+        self.b = b
+        self.W = 0.5*W
 
     def update_func(self, spin_config, i):
         #for mod2 formulation

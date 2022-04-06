@@ -31,7 +31,10 @@ class GibbsSampler():
         for i in range(v.size):
             p_v = 0
             if self.ising_form:
-                p_v = self.p_func(self.beta*(self.W[i].dot(v_new) - self.W[i,i]*v_new[i] + self.visible_bias[i]))
+                #p_v = self.p_func(self.beta*(self.W[i].dot(v_new) - self.W[i,i]*v_new[i] + 0.75*self.W[i,i] + self.visible_bias[i]))
+                p_v = self.p_func(self.beta*(2*self.W[i].dot(v_new) + self.visible_bias[i]))
+                #p_v = self.p_func(self.beta*(self.W[i].dot(v_new) - self.W[i,i]*v_new[i] + self.visible_bias[i]))
+                #p_v = self.p_func(self.beta*(self.W[i].dot(v_new) + self.W[i,i] + self.visible_bias[i]))
             else:
                 p_v = self.update_func(v_new, i)
             v_new[i] = int(np.random.uniform(self.low, self.high) < p_v)
@@ -67,16 +70,18 @@ class GibbsSampler():
             v = np.random.choice([self.low, self.high], self.visible_size)
         for i in range(self.burn_in):
             v = self.sample(v)
-        max_code = v[:visible_bits]
-        max_code_obj = self.obj_func(max_code)
+        #max_code = v[:visible_bits]
+        #max_code_obj = self.obj_func(max_code)
         for i in range(self.n_samples):
             v = self.sample(v)
             dist_lst.append(v)
+            """
             v_obj = self.obj_func(v[:visible_bits])
             if v_obj < max_code_obj:
                 max_code = v[:visible_bits]
                 max_code_obj = v_obj
-        return dist_lst, max_code
+            """
+        return dist_lst, None
 
 
 class BlockGibbsSampler(GibbsSampler):
