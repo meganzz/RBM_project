@@ -16,7 +16,7 @@ class LDPC():
         self.h = h
         self.h_mod2 = h_mod2 #for the objective function
         self.r = received_signal
-        self.H_spin_rows = [H[np.nonzero(H[:,i])] for i in range(message_len)]
+        self.H_spin_rows = [np.nonzero(H[:,i]) for i in range(message_len)]
         self.w_c = w_c
         self.beta = beta
         self.calc_w_b()
@@ -51,13 +51,16 @@ class LDPC():
         #number of p spins
         p_len = nonzero_row.size - H.shape[0]
         #constructs visible bias:
+        #sigma bias
         b_sigma = -received_signal + 0.5 + 0.5*h_km*np.sum(H, axis=0)
+        #p bias
         b_p = h_km*np.ones(p_len)
         for idx in range(len(p_last_idx)):
             b_p[p_last_idx[idx] - idx - 1] = 0.5*h_km+0.5*h
 
         #number of a spins
         a_len = p_len
+        #a bias
         b_a = -h_km*np.ones(a_len)
 
         b = np.concatenate([b_sigma, b_p, b_a])
@@ -68,7 +71,7 @@ class LDPC():
         #weights for sigmas
         w_sigma = np.zeros((n, total_len))
         for i in range(self.parity_len):
-            #first index
+            #first index of row
             new_w = np.zeros(total_len)
             start_i = p_first_idx[i]
             row = nonzero_col_by_row[i]
@@ -76,10 +79,11 @@ class LDPC():
             new_w[n + start_i - i] = -0.5*h_km
             new_w[n + p_len + start_i - i] = h_km
             w_sigma[nonzero_col_by_row[i][0]] += new_w
-            #second index
+            #second index of row
             new_w[row[1]] = 0
             new_w[first_nonzero[i]] = -0.5*h_km
             w_sigma[nonzero_col_by_row[i][1]] += new_w
+            #remaining nonzero indices in row
             for j in range(2, row.size):
                 new_w = np.zeros(total_len)
                 new_w[n + p_first_idx[i] - i + j - 2] = -0.5*h_km
@@ -87,16 +91,19 @@ class LDPC():
                 new_w[n + p_len + p_first_idx[i] - i + j - 1] = h_km
                 w_sigma[nonzero_col_by_row[i][j]] += new_w
 
+        #p weights
         w_p = np.zeros((p_len, total_len))
         for i in range(self.parity_len):
             start_i = p_first_idx[i]
             row = nonzero_col_by_row[i]
+            #first p in row
             w_p[start_i - i, row[0]] = -0.5*h_km
             w_p[start_i - i, row[1]] = -0.5*h_km
             w_p[start_i - i, row[2]] = -0.5*h_km
             w_p[start_i - i, n + start_i - i + 1] = -0.5*h_km
             w_p[start_i - i, n + p_len + start_i - i] = h_km
             w_p[start_i - i, n + p_len + start_i - i + 1] = h_km
+            #2nd through 2nd to last p in row
             for j in range(2, row.size - 1):
                 w_p[start_i - i + j - 1, row[j]] = -0.5*h_km
                 w_p[start_i - i + j - 1, row[j+1]] = -0.5*h_km
@@ -104,24 +111,32 @@ class LDPC():
                 w_p[start_i - i + j - 1, n + start_i - i + j] = -0.5*h_km
                 w_p[start_i - i + j - 1, n + p_len + start_i - i + j - 1] = h_km
                 w_p[start_i - i + j - 1, n + p_len + start_i - i + j] = h_km
+            #last p in row
             w_p[start_i - i + row.size - 2, row[-1]] = -0.5*h_km
             w_p[start_i - i + row.size - 2, n + start_i - i + row.size - 3] = -0.5*h_km
             w_p[start_i - i + row.size - 2, n + p_len + start_i - i + row.size - 2] = h_km
 
+        #a weights
         w_a = np.zeros((a_len, total_len))
         for i in range(self.parity_len):
             start_i = p_first_idx[i]
             row = nonzero_col_by_row[i]
+            #first a in row
             w_a[start_i - i, row[0]] = h_km
             w_a[start_i - i, row[1]] = h_km
             w_a[start_i - i, n + start_i - i] = h_km
             w_a[start_i - i, n + p_len + start_i - i] = -2*h_km
+            #2nd through 2nd to last a in row
             for j in range(2, row.size):
                 w_a[start_i - i + j - 1, row[j]] = h_km
                 w_a[start_i - i + j - 1, n + start_i - i + j - 2] = h_km
                 w_a[start_i - i + j - 1, n + start_i - i + j - 1] = h_km
                 w_a[start_i - i + j - 1, n + p_len + start_i - i + j - 1] = -2*h_km
         W = np.vstack([w_sigma, w_p, w_a])
+        #converts to binary
+        b = -2*(b + 2*np.sum(W, axis=1))
+        W = 4*W
+        #account for self loops and sampling
         b += np.diag(W)
         np.fill_diagonal(W, 0)
         self.b = b
@@ -129,10 +144,11 @@ class LDPC():
 
     def update_func(self, spin_config, i):
         #for mod2 formulation
+        H = self.H_matrix
         h = self.h_mod2
         b = 2*self.r - 1
         H_spin_rows = self.H_spin_rows
         spin = spin_config[i]
-        E_v = b[i] + h*self.w_c*(2*spin - 1) + 2*h*(1-spin)*np.sum(np.mod(H_spin_rows[i].dot(spin_config), 2))
+        E_v = b[i] + h*self.w_c*(2*spin - 1) + 2*h*(1-spin)*np.sum(np.mod(H[H_spin_rows[i]].dot(spin_config), 2))
         p_v = 1.0/(1.0+np.exp(-self.beta*E_v))
         return p_v
