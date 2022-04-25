@@ -8,7 +8,7 @@ import utils
 
 n_code = 32 #length of total bit string
 n_freq = 50 #how many configurations to evaluate
-h_km = 0.025 #0.5 #from paper
+h_km = 0.025#0.025 #0.5 #from paper
 h = 0.015 #0.015 #0.3 #from paper
 h_mod2 = 0.15 #for mod2 formulation
 w_r = 8 #from paper
@@ -17,7 +17,7 @@ beta = 2 #inverse temperature
 burn_in = 10000
 n_samples = 10000
 
-blocks = 50#60#5#100#5#300
+blocks = 300#50#60#5#100#5#300
 snr_range = np.linspace(1.5, 9.5, 6)
 
 def setup_gibbs(ising_form, H, r_noise):
@@ -65,7 +65,7 @@ def run_gibbs(ising_form, override):
         else:
             title = ldpc_name + " mod2 formulation"
             fname = ldpc_name + "_mod2.png"
-        utils.plot_ber(bp_ber, mle_ber, title, fname)
+        utils.plot_ber([bp_ber, mle_ber], ['bp', 'parity_check'], ['red', 'blue'], title, fname)
 
 def prob_dist(override):
     #gets distribution
@@ -270,6 +270,8 @@ def check_formulation():
 
 def ber_dist(override):
     #BER distribution according to distributions in prob_dist
+    #also graph average BER
+    bp_ber = np.zeros(6)
     freq_ber = [[] for _ in range(6)]
     obj_ber = [[] for _ in range(6)]
     energy_ber = [[] for _ in range(6)]
@@ -280,6 +282,10 @@ def ber_dist(override):
         r = np.mod(G.dot(m), 2)
         for i in range(6):
             r_noise = encode(G, m, snr=snr_range[i])
+            #bp
+            r_decode_bp = decode(H, r_noise, 20)
+            bp_ber[i] += (n_code - np.sum(np.equal(r_decode_bp, r)))
+            #ising formulation
             ldpc_sampler = setup_gibbs(True, H, r_noise)
             dist_lst, _ = ldpc_sampler.hit_engine(visible_bits=n_code)
             W = ldpc_sampler.W
@@ -315,33 +321,54 @@ def ber_dist(override):
             top_energy_idx = energy.argsort()[0]
             mod2_energy_ber[i].append((n_code - np.sum(np.equal(labels[top_energy_idx], r)))/n_code)
 
+    bp_ber = bp_ber/(blocks*n_code)
     bins = np.linspace(0, 1, num=n_code+1)
     for i in range(6):
         fig, axs = plt.subplots(3, 1, sharex=True)
         fig.set_size_inches(11, 9)
         axs[0].hist(freq_ber[i], bins=bins, color="blue")
-        axs[0].set_title("Count")
+        axs[0].set_title("Frequency")
         axs[1].hist(obj_ber[i], bins=bins, color="green")
         axs[1].set_title("Log Probability")
         axs[2].hist(energy_ber[i], bins=bins, color="magenta")
-        axs[2].set_title("Energy")
+        axs[2].set_title("Objective function")
         plt.xlim(0,1)
+        fig.supylabel("Count")
+        fig.supxlabel("BER")
         fig.suptitle("BER for Ising " + str(n_code) + "-bit: SNR Level " + str(i))
         if override:
-            plt.savefig('ber_dist_ising_'+str(n_code)+'_mle_'+str(block)+'_'+str(i)+'.png')
+            plt.savefig('ber_dist_ising_'+str(n_code)+'_mle_'+str(i)+'.png')
             plt.close()
+        obj_ber[i] = np.mean(obj_ber[i])
+        energy_ber[i] = np.mean(energy_ber[i])
 
         fig, axs = plt.subplots(2, 1, sharex=True)
         fig.set_size_inches(11, 6)
         axs[0].hist(mod2_freq_ber[i], bins=bins, color="blue")
-        axs[0].set_title("Count")
+        axs[0].set_title("Frequency")
         axs[1].hist(mod2_energy_ber[i], bins=bins, color="magenta")
-        axs[1].set_title("Energy")
+        axs[1].set_title("Objective function")
         plt.xlim(0,1)
+        fig.supylabel("Count")
+        fig.supxlabel("BER")
         fig.suptitle("BER for mod2 " + str(n_code) + "-bit: SNR Level " + str(i))
         if override:
-            plt.savefig('ber_dist_mod2_'+str(n_code)+'_mle_'+str(block)+'_'+str(i)+'.png')
+            plt.savefig('ber_dist_mod2_'+str(n_code)+'_mle_'+str(i)+'.png')
             plt.close()
+        mod2_energy_ber[i] = np.mean(mod2_energy_ber[i])
+    print("bp: ", bp_ber)
+    print("ising prob: ", obj_ber)
+    print("ising obj: ", energy_ber)
+    print("mod2 obj: ", mod2_energy_ber)
+    if override:
+        ldpc_name = "ldpc_"+str(n_code)+"_"+str(w_c)+"_"+str(w_r)
+        title = ldpc_name + r" different formulations, $\beta=$"+str(beta)
+        fname = ldpc_name + "_all_"+str(beta)+".png"
+        ber_lst = [bp_ber, obj_ber, energy_ber, mod2_energy_ber]
+        labels = ["bp", "ising - prob", "ising - obj", "mod2 - obj"]
+        colors = ["r", "b", "g", "m", "c"]
+        utils.plot_ber(ber_lst, labels, colors, title, fname)
+
 
 def test_self_loop():
     #determine how to handle self loops

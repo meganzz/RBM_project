@@ -21,7 +21,7 @@ def gen_ising_mem(snr, ising_form):
 	#ising_form is true when it is ising and false when mod2
 	H, G, m = utils.gen_matrices(n_code, w_c, w_r)
 	print("H:", H)
-	utils.bin_to_file(H.flatten(), "ldpc_"+str(n_code)+"_H.mem")
+	utils.bin_to_file(np.flip(H, axis=0).flatten(), "ldpc_"+str(n_code)+"_H.mem")
 	r = np.mod(G.dot(m), 2)
 	print("original:", r)
 	r_noise = r #(1-encode(G, m, snr=snr))/2
@@ -55,11 +55,11 @@ def gen_ising_mem(snr, ising_form):
 		print("Sigma indices:", [group_order.index(i) for i in range(8)])
 		W = W[group_order][:, group_order]
 		b = b[group_order]
-		utils.float_to_fix(W.flatten(), precision_bits, p_index, "ldpc_"+str(n_code)+"_weights.mem")
+		utils.float_to_fix(np.flip(W, axis=0).flatten(), precision_bits, p_index, "ldpc_"+str(n_code)+"_weights.mem")
 		utils.float_to_fix(b, precision_bits, p_index, "ldpc_"+str(n_code)+"_bias.mem")
 	else:
 		#TODO: finish implementing for mod2
-		
+		return
 
 if __name__ == "__main__":
 	parser = argparse.ArgumentParser()
