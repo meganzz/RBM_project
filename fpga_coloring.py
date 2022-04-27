@@ -1,8 +1,10 @@
 import argparse
 import numpy as np
+import matplotlib.pyplot as plt
 import networkx as nx
 import utils
 import ldpc
+from pyldpc import encode
 
 n_code = 8 #length of total bit string
 h_km = 0.25 #0.5 #from paper
@@ -10,7 +12,7 @@ h = 0.15 #0.015 #0.3 #from paper
 h_mod2 = 0.15 #for mod2 formulation
 w_r = 4#8 #from paper
 w_c = 2#4 #from paper
-beta = 1#2 #inverse temperature
+beta = 2 #inverse temperature
 burn_in = 10000
 n_samples = 10000
 precision_bits = 10
@@ -20,11 +22,13 @@ def gen_ising_mem(snr, ising_form):
 	#generate and save .mem files for the given formulation
 	#ising_form is true when it is ising and false when mod2
 	H, G, m = utils.gen_matrices(n_code, w_c, w_r)
+	print("G:", G)
+	np.savetxt("ldpc_"+str(n_code)+"_G.txt", G, fmt="%d")
 	print("H:", H)
 	utils.bin_to_file(np.flip(H, axis=0).flatten(), "ldpc_"+str(n_code)+"_H.mem")
 	r = np.mod(G.dot(m), 2)
 	print("original:", r)
-	r_noise = r #(1-encode(G, m, snr=snr))/2
+	r_noise = (1-encode(G, m, snr=snr))/2
 	print("received:", r_noise)
 	utils.float_to_fix(r_noise, precision_bits, p_index, "ldpc_"+str(n_code)+"_received.mem")
 	ldpc_obj = ldpc.LDPC(H, n_code, H.shape[0], h_km, h, h_mod2, r_noise, w_c, beta=beta)
@@ -61,6 +65,19 @@ def gen_ising_mem(snr, ising_form):
 		#TODO: finish implementing for mod2
 		return
 
+def read_results():
+	#reads in the results, then plots dist
+	#print(np.loadtxt("basic_dist_lst.txt", dtype=int)[:10])
+	dist_lst = []
+	with open("basic_dist_lst.txt", 'r') as f:
+		for line in f:
+			dist_lst.append(int(line[:-1][::-1], 2))
+	labels, freq = np.unique(dist_lst, return_counts=True)
+	freq = freq/len(dist_lst)
+	plt.stem(labels, freq)
+	plt.title("FPGA: Probability")
+	plt.show()
+
 if __name__ == "__main__":
 	parser = argparse.ArgumentParser()
 	help_str = "1 - generate .mem files"
@@ -68,4 +85,6 @@ if __name__ == "__main__":
 	args = parser.parse_args()
 	if args.mode == 1:
 		#generate the .mem files
-		gen_ising_mem(0, ising_form=True)
+		gen_ising_mem(8, ising_form=True)
+	if args.mode == 2:
+		read_results()

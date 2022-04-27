@@ -74,6 +74,6 @@ def float_to_fix(arr, precision_bits, p_index, fname):
     #converts floating point to fixed point of length precision_bits and p_index bits below the fixed point
     #writes data to fname
     output = np.around(2**p_index*arr, decimals=0).astype(int)
-    output = [np.binary_repr(o, precision_bits)[::-1] + "\n" for o in output]
+    output = [np.binary_repr(o, precision_bits) + "\n" for o in output]
     with open(fname, "w") as f:
         f.writelines(output)
